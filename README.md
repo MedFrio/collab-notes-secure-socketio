@@ -4,9 +4,11 @@ Application de tableau de notes **collaborative** en **temps réel** (Socket.IO)
 - Écriture réservée aux utilisateurs authentifiés
 - Modification/Suppression uniquement par le **propriétaire** de la note
 
-bash
+
 npm install
+
 npm run start
+
 http://localhost:3000
 
 🔐 Endpoints (REST)
