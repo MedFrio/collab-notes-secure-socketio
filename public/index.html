@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Collab Notes (Secure)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 24px auto; padding: 0 16px; }
+    .row { display: flex; gap: 8px; margin-bottom: 8px; }
+    input, button { padding: 8px; }
+    ul { list-style: none; padding: 0; }
+    li { padding: 8px; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 8px; }
+    .muted { color: #666; font-size: 0.9em; }
+    .actions button { margin-right: 6px; }
+    .hidden { display: none; }
+    .card { border: 1px solid #ddd; padding: 12px; border-radius: 8px; margin: 12px 0; }
+  </style>
+</head>
+<body>
+  <h1>Collab Notes (Secure)</h1>
+
+  <div class="card">
+    <h2>Authentification</h2>
+    <div id="auth-section">
+      <div class="row">
+        <input id="username" placeholder="username" />
+        <input id="password" type="password" placeholder="password" />
+      </div>
+      <div class="row">
+        <button id="btn-register">S'inscrire</button>
+        <button id="btn-login">Se connecter</button>
+        <button id="btn-logout" class="hidden">Se déconnecter</button>
+      </div>
+      <div class="muted" id="auth-info">Non authentifié</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Créer une note</h2>
+    <div class="row">
+      <input id="note-content" placeholder="Contenu de la note..." />
+      <button id="btn-add">Ajouter</button>
+    </div>
+    <div class="muted">Seuls les utilisateurs connectés peuvent créer des notes.</div>
+  </div>
+
+  <div class="card">
+    <h2>Notes</h2>
+    <ul id="notes"></ul>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const apiBase = '';
+    let token = localStorage.getItem('token') || null;
+    let currentUser = JSON.parse(localStorage.getItem('user') || 'null');
+
+    const el = (id) => document.getElementById(id);
+    const username = el('username');
+    const password = el('password');
+    const btnRegister = el('btn-register');
+    const btnLogin = el('btn-login');
+    const btnLogout = el('btn-logout');
+    const authInfo = el('auth-info');
+    const noteContent = el('note-content');
+    const btnAdd = el('btn-add');
+    const notesList = el('notes');
+
+    function setAuthUI() {
+      if (token && currentUser) {
+        authInfo.textContent = `Connecté en tant que ${currentUser.username} (id: ${currentUser.id})`;
+        btnLogout.classList.remove('hidden');
+      } else {
+        authInfo.textContent = 'Non authentifié';
+        btnLogout.classList.add('hidden');
+      }
+    }
+    setAuthUI();
+
+    // Socket.IO : on peut passer le token pour lecture/usage futur
+    const socket = io('/', {
+      auth: token ? { token } : {}
+    });
+
+    socket.on('notes_updated', (allNotes) => {
+      renderNotes(allNotes);
+    });
+
+    async function fetchJSON(url, options = {}) {
+      const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+      if (token) headers['Authorization'] = 'Bearer ' + token;
+      const res = await fetch(url, { ...options, headers });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      return res.json();
+    }
+
+    function renderNotes(allNotes) {
+      notesList.innerHTML = '';
+      allNotes.forEach(n => {
+        const li = document.createElement('li');
+        const mine = currentUser && n.authorId === currentUser.id;
+
+        const contentSpan = document.createElement('span');
+        contentSpan.textContent = n.content;
+
+        const meta = document.createElement('div');
+        meta.className = 'muted';
+        meta.textContent = `id: ${n.id} | authorId: ${n.authorId}`
+
+        const actions = document.createElement('div');
+        actions.className = 'actions';
+
+        if (mine && token) {
+          const editBtn = document.createElement('button');
+          editBtn.textContent = 'Modifier';
+          editBtn.onclick = async () => {
+            const newContent = prompt('Nouveau contenu :', n.content);
+            if (!newContent || !newContent.trim()) return;
+            try {
+              await fetchJSON(`/notes/${n.id}`, {
+                method: 'PUT',
+                body: JSON.stringify({ content: newContent.trim() })
+              });
+              // Pas besoin de recharger : le serveur émet 'notes_updated'
+            } catch (e) {
+              alert('Erreur: ' + e.message);
+            }
+          };
+
+          const delBtn = document.createElement('button');
+          delBtn.textContent = 'Supprimer';
+          delBtn.onclick = async () => {
+            if (!confirm('Supprimer cette note ?')) return;
+            try {
+              await fetchJSON(`/notes/${n.id}`, { method: 'DELETE' });
+            } catch (e) {
+              alert('Erreur: ' + e.message);
+            }
+          };
+
+          actions.appendChild(editBtn);
+          actions.appendChild(delBtn);
+        }
+
+        li.appendChild(contentSpan);
+        li.appendChild(meta);
+        li.appendChild(actions);
+        notesList.appendChild(li);
+      });
+    }
+
+    // Charger l’état initial (lecture publique)
+    fetchJSON('/notes').then(renderNotes).catch(() => { /* ignore */ });
+
+    // Auth events
+    btnRegister.onclick = async () => {
+      try {
+        const data = await fetchJSON('/register', {
+          method: 'POST',
+          body: JSON.stringify({ username: username.value.trim(), password: password.value })
+        });
+        alert('Inscription réussie, vous pouvez vous connecter.');
+      } catch (e) {
+        alert('Erreur: ' + e.message);
+      }
+    };
+
+    btnLogin.onclick = async () => {
+      try {
+        const data = await fetchJSON('/login', {
+          method: 'POST',
+          body: JSON.stringify({ username: username.value.trim(), password: password.value })
+        });
+        token = data.token;
+        currentUser = data.user;
+        localStorage.setItem('token', token);
+        localStorage.setItem('user', JSON.stringify(currentUser));
+        setAuthUI();
+
+        // reconnecter le socket avec le token
+        socket.auth = { token };
+        socket.disconnect().connect();
+      } catch (e) {
+        alert('Erreur: ' + e.message);
+      }
+    };
+
+    btnLogout.onclick = async () => {
+      token = null;
+      currentUser = null;
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      setAuthUI();
+
+      // reconnecter le socket en anonyme
+      socket.auth = {};
+      socket.disconnect().connect();
+    };
+
+    // Ajout de note (auth requise côté serveur)
+    btnAdd.onclick = async () => {
+      const content = noteContent.value.trim();
+      if (!content) return;
+      try {
+        await fetchJSON('/notes', {
+          method: 'POST',
+          body: JSON.stringify({ content })
+        });
+        noteContent.value = '';
+      } catch (e) {
+        alert('Erreur: ' + e.message + ' (êtes-vous connecté ?)');
+      }
+    };
+  </script>
+</body>
+</html>
